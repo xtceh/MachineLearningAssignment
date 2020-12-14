@@ -1,0 +1,132 @@
+---
+title: "Machine Learning Assignment"
+author: "Ed"
+date: "10/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+This assignment looks at data from wearable fitness devices and aims to train a model to detect how well a user is performing an exercise.  
+
+## Explore the Data and Transform ready for Training
+
+```{r}
+pmltrain<-read.csv("pml-training.csv")
+pmlval<-read.csv("pml-testing.csv")
+dim(pmltrain)
+pmltrain<-subset(pmltrain,new_window=="no")
+dim(pmltrain)
+dim(pmlval)
+```
+
+There are 19,622 observations of 160 variables in the training data and 20 observations of 160 variables in the testing data. Included in the variables are the classe of the exercise (A representing the correct performance and B, C, D an E representing various incorrect performances of it), a user name (6 users), time stamp information, 'window' which I haven't found any information about, and the remainder are measurements taken from 4 devices (represented by "_belt", "_arm", "_dumbbell" or "_forearm" being included in the name of the variable).  
+
+It is noticeable that there are a number of variables which only have any information in them when the variable "new_window" equals Yes. Since "new_window" equals No for all the observations in the testing set, it will not help to include these rows and they are removed above, reducing the number of observations to 19,216.  
+
+Now we only want to train on those variables which are not empty or NA so we subset the data to exclude these data variables. We do the same to the test data. Also, apart possibly from the user, the first 7 columns of indices, dates and windows are not expected to be useful predictors so we will remove them. Then, for the training to work, classe needs to be a factor. These transformations are processed below.  
+
+```{r warning=FALSE, message=FALSE}
+library(caret)
+pmltrain<-subset(pmltrain,new_window=="no")
+dim(pmltrain)
+no_na_empty<-function(x){r<-TRUE
+    for (y in x){if (y=="" | is.na(y)){r<-FALSE}}
+    r
+}
+pmltrain<-pmltrain[,apply(pmltrain,2,no_na_empty)]
+pmltrain<-pmltrain[,c(2,8:dim(pmltrain)[2])]
+dim(pmltrain)
+pmlval<-pmlval[,apply(pmlval,2,no_na_empty)]
+pmlval<-pmlval[,c(2,8:dim(pmlval)[2])]
+dim(pmlval)
+pmltrain$classe<-factor(pmltrain$classe)
+```
+
+Before we use our model to predict the classe for the final test data, we will need to test it so the training data needs to be split into 2 sets of data, one to train the model on and one to test it. One obvious initial way to split this would be to use 4 of the users in the first set and 2 in the second set (pmltrain_user and pmltest_user). However, it will be interesting to see if including who the user is helps us to make predictions as if this works it would imply that the model needs to be trained on each user rather than being able to be used directly on users who were not part of the study. So we also split based on a random 70% in the first set and 30% in the second set (pmltrain_rand and pmltest_rand).  
+
+```{r warning=FALSE, message=FALSE}
+pmltrain_user<-pmltrain[pmltrain$user_name %in% names(table(pmltrain$user_name)[1:4]),]
+pmltrain_user<-pmltrain_user[,-1]
+dim(pmltrain_user)
+pmltest_user<-pmltrain[pmltrain$user_name %in% names(table(pmltrain$user_name)[5:6]),]
+pmltest_user<-pmltest_user[,-1]
+dim(pmltest_user)
+set.seed(12345)
+inTrain<-createDataPartition(pmltrain$classe,p=0.7,list=FALSE)
+pmltrain_rand<-pmltrain[inTrain,]
+dim(pmltrain_rand)
+pmltest_rand<-pmltrain[-inTrain,]
+dim(pmltest_rand)
+```
+
+## Training Models - 1. Decision Tree
+
+Now we can begin to look at the results achieved with some different algorithms. First with rpart for decision trees, showing the confusion matrix against the training set and against the test set as well as doing both of these for the training/testing data split by user and the random split.   
+
+```{r warning=FALSE, message=FALSE}
+library(rpart)
+library(rattle)
+mod_rpart_user<-train(classe~.,data=pmltrain_user,method="rpart")
+confusionMatrix(predict(mod_rpart_user,pmltrain_user),pmltrain_user$classe)$table
+conf_rpart_user<-confusionMatrix(predict(mod_rpart_user,pmltest_user),pmltest_user$classe)
+conf_rpart_user$overall[1];conf_rpart_user$table
+
+mod_rpart_rand<-train(classe~.,data=pmltrain_rand,method="rpart")
+confusionMatrix(predict(mod_rpart_rand,pmltrain_rand),pmltrain_rand$classe)$table
+conf_rpart_rand<-confusionMatrix(predict(mod_rpart_rand,pmltest_rand),pmltest_rand$classe)
+conf_rpart_rand$overall[1];conf_rpart_rand$table
+plot(conf_rpart_rand$table,col=conf_rpart_rand$byclass,main=paste("Decision Tree Confusion Matrix - Accuracy=",round(conf_rpart_rand$overall["Accuracy"],4)))
+fancyRpartPlot(mod_rpart_rand$finalModel)
+```
+
+This model is not performing well at all.The decision tree for the training set split by user predicts mostly C while the decision tree for the training set determined randomly does not predict D at all.  
+
+## Training Models - 2. Random Forest
+
+However, it seems possible that moving to a random forest would enable the decisions to be more accurate, at the cost of a more time-consuming training process.  
+
+```{r  warning=FALSE, message=FALSE, cache=TRUE}
+mod_rf_user<-train(classe~.,data=pmltrain_user,method="rf")
+mod_rf_user$finalModel$confusion
+conf_rf_user<-confusionMatrix(predict(mod_rf_user,pmltest_user),pmltest_user$classe)
+conf_rf_user$overall[1];conf_rf_user$table
+
+mod_rf_rand<-train(classe~.,data=pmltrain_rand,method="rf")
+mod_rf_rand$finalModel$confusion
+conf_rf_rand<-confusionMatrix(predict(mod_rf_rand,pmltest_rand),pmltest_rand$classe)
+conf_rf_rand$overall[1];conf_rf_rand$table
+plot(conf_rf_rand$table,col=conf_rf_rand$byclass,main=paste("Random Forest Confusion Matrix - Accuracy=",round(conf_rf_rand$overall["Accuracy"],4)))
+```
+
+This shows that the random forest method fits very well to the training set. However, on the testing set it performs much better on the random split (`r paste(round(conf_rf_rand$overall[1],2)*100,"%",sep="")` accuracy to `r paste(round(conf_rf_user$overall[1],2)*100,"%",sep="")`) which implies that there is something about including the individual users in the predictors which helps the training algorithm. It also takes around 40 minutes to run on my computer which is not quick for 'only' 13,000 observations in the training set.  
+
+## Training Models - 2. Random Forest with PCA
+
+Model-based predictions are not helpful, probably because the variables are highly dependent on each other. However, one way of improving the fit while improving the performance might be to use a PCA analysis in the pre-processing. Below, only the results for the training set split randomly are shown.
+
+```{r  warning=FALSE, message=FALSE}
+library(dplyr)
+ctrlRF<-trainControl(method="cv",allowParallel=T)
+mod_pca_rand<-train(classe~.,data=pmltrain_rand,method="rf",preProcess="pca",trControl=ctrlRF,tuneGrid=data.frame(mtry=5))
+mod_pca_rand$finalModel$confusion
+conf_pca_rand<-confusionMatrix(predict(mod_pca_rand,pmltest_rand),pmltest_rand$classe)
+conf_pca_rand$overall[1];conf_pca_rand$table
+plot(conf_pca_rand$table,col=conf_pca_rand$byclass,main=paste("Random Forest with PCA Confusion Matrix - Accuracy=",round(conf_pca_rand$overall["Accuracy"],4)))
+```
+
+This is a little less accurate at `r paste(round(conf_pca_rand$overall[1],2)*100,"%",sep="")` on the random split but is much faster, taking only around 2 minutes to run on my computer.  
+
+## Conclusion
+
+There are many further tests that could be made such as increasing the threshold in the PCA (from the default of 0.95) to allow it to include more principal components which should increase accuracy but slow the process down or trying Generalised Booster Models.  
+
+Based on the results above, it could be better to use the PCA pre-process in situations where the training needs to be done frequently. However, for the validation data we will use the Random Forest model on the training data chosen randomly since it is the most accurate with an expected error rate of just under 1%. The results below will be used to answer the Course Project Prediction Quiz.  
+
+```{r}
+predict(mod_rf_rand,pmlval)
+```
